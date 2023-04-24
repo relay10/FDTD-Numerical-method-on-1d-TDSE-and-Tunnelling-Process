@@ -1,0 +1,289 @@
+
+% This code models the tunnelling process of a wavefunction by solving the
+% 1d TDSE using the FDTD numerical method. The code allows the modelling of
+% 3 barrier types:
+% Square, Gaussain, and Coulomb shaped potential barriers, depending on
+% which barrier is commented.
+% The barrier thickness can be chaged but needs to be manually updated.
+
+close all;
+clear;
+clc;
+tic;
+
+% ========================================================================
+% INPUTS
+% ========================================================================
+Nx = 8001;         % [1001]   must be an odd number - number of grid points
+Nt = 80000;       % [10000]  number of time steps
+
+me = 9.10938291e-31;    % electron mass
+hbar = 1.054571726e-34; % hbar Planck's constant
+e = 1.602176565e-19;    % elementary charge
+ep0 = 8.8542e-12; % vacuum permativity | F/m in SI units.
+
+
+
+NxC = round(Nx/2);        % centre postion for Simpson's rule Prob1 and Prob2
+
+L = 64e-9;                 % [ 4e-9]   length
+
+
+% Initialise the pulse
+nx0 = round(Nx/4);     % pulse centre   round(Nx/4)
+%wL = L/40;             % pulse wavelength   L/40
+s = L/25;              % pulse width        L/25
+wL = 1.6e-10;
+
+% ========================================================================
+% SETUP
+% ========================================================================
+h = hbar*2*pi;
+KE = (h/wL)^2/(2*me*e);  % theoretical KE(ev)
+KEj = (h/wL)^2/(2*me);  % theoretical KE(J)
+vel = sqrt((2*KEj)/me);
+x = linspace(0,L,Nx);
+dx = x(2) - x(1);
+yR = zeros(1,Nx);  yI = zeros(1,Nx);
+t = zeros(Nt,1);
+C1 = 1/10;
+dt = C1 * 2 * me * dx^2 / hbar;
+C2 = e*dt/hbar;
+C3 = -hbar^2 / (2 * me * dx^2 * e);
+T = Nt * dt;
+%wL = 40*dx;
+
+% Time of barrier impact -----
+LHSdist = ((Nx/2) - nx0)*dx;
+inTime = LHSdist/vel
+
+
+%nStep = round((1:9)*Nt/9);
+
+nStep = 500;
+
+
+% Potential energy function U  -------------------------------------------
+U = zeros(1,Nx); 
+
+U0 = +(1.375)*KE;   % Potential Barrier Height as a Ratio of Kinetic Energy
+
+% Define the parameters for the Woods-Saxon potential
+R = L/2;  % Radius of the nucleus
+a = L/10; % Diffuseness parameter
+Umax = U0*e; % Joules
+
+
+% for nx = int64(Nx/2) : int64(Nx/2)+250
+%     U(nx) = 2*U0 / (1 + exp((x(nx)-R)/a));  % Coulomb shaped barrier 
+% end
+
+% U(int64(Nx/2):int64(Nx/2)+250) = U0.*exp(-(x(int64(Nx/2):(int64(Nx/2)+250))-x(int64(Nx/2))).^2/(2*s^2)); % Gaussian potential barrier
+
+U(int64(Nx/2):int64(Nx/2)+750) = U0; % Square barrier
+
+
+
+
+% ========================================================================
+% INITIAL WAVE PACKET
+% ========================================================================
+
+for nx = 1 : Nx
+    yR(nx) = exp(-0.5*((x(nx)-x(nx0))/s)^2)*cos(2*pi*(x(nx)-x(nx0))/wL);
+    yI(nx) = exp(-0.5*((x(nx)-x(nx0))/s)^2)*sin(2*pi*(x(nx)-x(nx0))/wL);
+end
+
+% Normalize initial wave packet
+y2 = yR.^2 + yI.^2;
+A = simpson1d(y2,0,L);
+yR = yR ./ sqrt(A); yI = yI ./ sqrt(A);
+prob_density = yR.^2 + yI.^2;
+yR1 = yR; yI1 = yI; yP11 = prob_density;
+% probD = yR1.^2 + yI1.^2;
+
+% % Kinetic energy KE
+% fn = zeros(1,Nx-2);
+% for nx = 2 : Nx-1
+%     fn(nx) = C3 * (yR(nx) - 1i * yI(nx)) * ...
+%         (yR(nx+1) - 2 * yR(nx) + yR(nx-1)+ 1i *(yI(nx+1) - 2 * yI(nx) + yI(nx-1)));
+% end
+% K1avg = simpson1d(fn,0,L);
+
+% ========================================================================
+% FDTD solution of Schrodinger Equation
+% ========================================================================
+cs = 1; %probD = zeros(Nx,9);
+
+yR_prob = zeros(Nt,Nx);  yI_prob = zeros(Nt,Nx);
+real_peak = zeros(Nt,Nx); imag_peak = zeros(Nt,Nx);
+out_found=0;
+in_found=0;
+count=1;
+
+% Peak array 
+peaks = zeros(1,Nt);
+peakVal = -inf;
+peakIdx = -1;
+probD = zeros(1,Nx);
+probD1_smooth = zeros(1,Nx);
+pkFound = false;
+peakFound = false;  % initialize flag variable
+
+% PML boundary
+PML = 1e3; %PML strength
+damping = @(x)exp(-(PML.*(x/L).^2));
+
+for nt = 1 : Nt
+    for nx = 2 : Nx - 1
+        
+        yR(nx) = yR(nx) - C1*(yI(nx+1)-2*yI(nx)+yI(nx-1))+ C2*U(nx)*yI(nx);
+
+        if (nx < PML+1)
+            yR(nx) = yR(nx)*damping((PML-nx+1)*dx);
+        end
+
+        if (nx > Nx-750)
+            yR(nx) = yR(nx)*damping((nx-Nx+PML)*dx);
+        end
+
+        
+
+    end
+
+
+    for nx = 2 : Nx-1
+
+        yI(nx) = yI(nx) + C1*(yR(nx+1)-2*yR(nx)+yR(nx-1)) - C2*U(nx)*yR(nx);    
+         
+        if (nx < PML+1)
+            yI(nx) = yI(nx)*damping((PML-nx+1)*dx);
+        end
+
+        if (nx > Nx-750)
+            yI(nx) = yI(nx)*damping((nx-Nx+PML)*dx);
+        end
+
+
+    end
+
+    
+    if rem(nt,nStep) == 0
+        probD = yR.^2 + yI.^2;
+        
+        % smooth with moving average filter
+        B = 1/20*ones(20,1);
+        probD_smooth = filter(B,1,probD);
+        count=count+1;
+        
+        % evaluate the average above and below position bin
+        % number int64(Nx/2)+251
+
+        lower_av = mean(probD_smooth(int64(Nx/2)+(220+550):int64(Nx/2)+(250+550))); % position bins will have to be manually updated depending on the barrier thickness
+        upper_av = mean(probD_smooth(int64(Nx/2)+(252+550):int64(Nx/2)+(282+550)));% i.e for a barrier thickness of 750 spacial grid points, am equivalent position bin has to be input 
+        
+        % only examine times > half the maximum to ignore initial
+        % fluctuations in prob dist
+        if nt > int64(Nt/2)
+            % check if you have a peak
+            if probD_smooth(int64(Nx/2)+(251+550)) > lower_av && probD_smooth(int64(Nx/2)+(251+550))< upper_av
+               
+               
+                outTime  =nt*dt;
+                disp('time of peak emergence')
+                disp(outTime)
+                disp("peak height")
+               
+                break
+                
+                
+            end
+        end
+
+
+        
+        figure(2);
+        subplot(3,1,1);
+        plot(x,probD_smooth);
+        xlim([3.3604e-08 6.4e-8]);
+        title('probability distribution',nt*dt)
+
+        subplot(3,1,2);
+        plot(x,yR);
+        title('\psi_R (real)',nt*dt);
+        
+        subplot(3,1,3);
+        plot(x,yI);
+        title('\psi_I (imag)',nt*dt);
+
+        M(count) = getframe();
+
+        if nt == int64(Nx/2)
+            display(dt)
+        end
+       
+
+    end
+
+end
+
+% Kinetic energy KE
+fn = zeros(1,Nx-2);
+% vel = zeros(1,Nx-2);
+for nx = 2 : Nx-1
+    fn(nx) = C3 * (yR(nx) - 1i * yI(nx)) * yR(nx+1) - 2 * yR(nx) + yR(nx-1)+ 1i *(yI(nx+1) - 2 * yI(nx) + yI(nx-1));
+    % Calculate velocity
+    %     vel(nx) = sqrt((2*fn(nx))/me);
+    %     disp(vel(nx));
+
+end
+K1avg = simpson1d(fn,0,L);
+
+% PROBABILITY
+    fn = (yR - 1i*yI) .* (yR + 1i*yI);
+    prob = simpson1d(fn,0,L);
+    
+    prob1 = simpson1d(fn(1:NxC),0,L/2);
+    prob2 = simpson1d(fn(NxC:end),L/2,L);
+
+% POSITION x
+   fn = x .* (yR.^2 + yI.^2);
+   xavg = simpson1d(fn,0,L) ;
+   
+% Potential energy  U
+    fn = U .* (yR.^2 + yI.^2);
+    Uavg = simpson1d(fn,0,L);
+
+
+% Tunnelling time
+
+T_time = outTime-inTime;
+d = (round(Nx/2)+750 - round(Nx/2))*dx; % tunnel width, has to be updated manually with barrier thickness.
+T_vel = d/T_time
+
+% ------- Dwell, Traversal and Phase-delay times --------
+
+kappa = sqrt(2*me*(Umax-KEj))/hbar; 
+k0 = sqrt((Umax*2*me)/hbar^2);
+k = sqrt(KEj*2*me/hbar^2);
+
+Tdwell = ((me*k)/(hbar*kappa))*((2*kappa*d*(kappa^2-k^2)+k0^2*sinh(2*kappa*d))/(4*k^2*kappa^2+k0^4*sinh(kappa*d)^2));
+vel_dwell = d/Tdwell;
+
+Tphase = (me/(hbar*k*kappa))*((2*kappa*d*k^2*(kappa^2-k^2)+k0^4*sinh(2*kappa*d))/(4*k^2*kappa^2+k0^4*sinh(kappa*d)^2));
+vel_phase = d/Tphase;
+
+Tz = ((me*k0^2)/(hbar*kappa^2))*(((kappa^2-k^2)*sinh(kappa*d)^2+((kappa*d*k0^2)/2)*sinh(2*kappa*d))/(4*k^2*kappa^2 + k0^4*sinh(kappa*d)^2));
+
+Ttrav = (Tdwell^2+Tz^2)^0.5;
+vel_trav = d/Ttrav;
+timeData = [T_time ; Ttrav ; Tdwell ; Tphase ];
+velData = [T_vel ; vel_trav ; vel_dwell ; vel_phase];
+
+timeTable = array2table(timeData,"RowNames",{'Calculated tunnelling time','Traversal time','Dwell time','Phase time'})
+
+velTable = array2table(velData,"RowNames",{'Calculated tunnelling velocity','Traversal Velocity','Dwell velocity','Phase velocity'})
+
+TProb = [(16*k^2*kappa)/(k^2+kappa^2)^2]*exp(-2*d*kappa)
+
+
